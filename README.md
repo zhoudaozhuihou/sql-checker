@@ -16,6 +16,115 @@
 - API接口集成
 - 分析结果存储
 
+## 部署方式
+
+### 环境要求
+
+- Python 3.8+
+- pip包管理工具
+
+### 安装步骤
+
+1. 克隆项目代码
+```bash
+git clone https://github.com/yourusername/sql-check.git
+cd sql-check
+```
+
+2. 安装依赖包
+```bash
+pip install -r requirements.txt
+```
+
+3. 配置环境变量
+```bash
+# 复制环境变量示例文件
+copy .env.example .env
+
+# 编辑.env文件，配置必要的环境变量
+# 如果使用Copilot模型，需要配置GitHub Copilot API密钥
+GITHUB_COPILOT_TOKEN=your_token_here
+```
+
+## 启动方式
+
+### 启动API服务
+
+```bash
+python app.py
+```
+
+服务默认在 http://localhost:5000 启动，可以通过环境变量配置端口号：
+```bash
+# Windows
+set PORT=8000
+python app.py
+
+# Linux/Mac
+export PORT=8000
+python app.py
+```
+
+## 配置新模型
+
+### 创建新的分析模型
+
+1. 在`models`目录下创建新的模型文件，例如`custom_model.py`
+
+2. 继承基础模型类并实现必要的方法：
+
+```python
+from typing import Dict, Any, List
+from .base_model import SQLAnalyzerModel
+
+class CustomModel(SQLAnalyzerModel):
+    """自定义SQL分析模型"""
+    
+    def analyze(self, sql_query: str) -> Dict[str, Any]:
+        """实现SQL分析逻辑"""
+        safety_issues = self.get_safety_issues(sql_query)
+        performance_suggestions = self.get_performance_suggestions(sql_query)
+        risk_score = self.calculate_risk_score(sql_query)
+        
+        return {
+            "safety_issues": safety_issues,
+            "performance_suggestions": performance_suggestions,
+            "risk_score": risk_score,
+            "risk_level": self.get_risk_level(risk_score),
+            "details": "由自定义模型分析生成"
+        }
+    
+    def get_safety_issues(self, sql_query: str) -> List[Dict[str, Any]]:
+        """实现安全性检查逻辑"""
+        # 自定义实现
+        pass
+    
+    def get_performance_suggestions(self, sql_query: str) -> List[Dict[str, Any]]:
+        """实现性能建议逻辑"""
+        # 自定义实现
+        pass
+    
+    def calculate_risk_score(self, sql_query: str) -> int:
+        """实现风险评分逻辑"""
+        # 自定义实现
+        pass
+```
+
+3. 在`models/__init__.py`中注册新模型：
+
+```python
+from .custom_model import CustomModel
+
+# 将新模型添加到可用模型字典中
+MODEL_MAPPING = {
+    "simple": SimpleModel,
+    "advanced": AdvancedModel,
+    "copilot": CopilotModel,
+    "ollama": OllamaModel,
+    "custom": CustomModel  # 添加新模型
+}
+```
+
 ## 项目结构
 
 ```
@@ -99,60 +208,6 @@ Content-Type: application/json
 
 | 风险等级 | 分数范围 |
 |---------|----------|
-| 高风险 (High) | 70-100 |
-| 中风险 (Medium) | 30-69 |
-| 低风险 (Low) | 0-29 |
-
-### 分析模型特点
-
-#### SimpleModel
-- 基础的规则匹配
-- 快速的风险评估
-- 适合简单SQL查询检查
-
-#### AdvancedModel
-- 详细的安全性分析
-- 全面的性能建议
-- 精确的风险评分
-- 支持复杂SQL语句
-
-#### CopilotModel
-- AI驱动的智能分析
-- 需要GitHub Copilot API支持
-- 可提供更自然的建议
-
-#### OllamaModel
-- 本地AI模型分析
-- 无需外部API
-- 支持自定义模型
-
-## 环境配置
-
-1. 安装依赖：
-```bash
-pip install -r requirements.txt
-```
-
-2. 配置环境变量：
-```bash
-# .env文件
-TEST_OLLAMA=true  # 启用Ollama模型测试
-TEST_COPILOT=true # 启用Copilot模型测试
-```
-
-## 注意事项
-
-1. 高风险操作建议：
-   - 确保有适当的权限控制
-   - 进行数据备份
-   - 启用审计日志
-
-2. 性能优化建议：
-   - 避免使用SELECT *
-   - 添加适当的WHERE条件
-   - 注意索引使用
-
-3. 安全性建议：
-   - 使用参数化查询
-   - 避免SQL注入风险
-   - 限制查询范围
+| 低风险 | 0-30 |
+| 中风险 | 31-70 |
+| 高风险 | 71-100 |
