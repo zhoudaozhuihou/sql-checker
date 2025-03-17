@@ -1,0 +1,4 @@
+# GitHub Copilot API Configuration
+GITHUB_TOKEN=your_github_token_here
+COPILOT_API_URL=https://api.githubcopilot.com/chat/completions
+COPILOT_AUTH_URL=https://api.github.com/copilot_internal/v2/token

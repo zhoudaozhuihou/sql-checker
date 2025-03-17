@@ -2,80 +2,221 @@ from typing import Dict, Any, List
 import requests
 from .base_model import SQLAnalyzerModel
 import os
+import json
+import time
 
 class CopilotModel(SQLAnalyzerModel):
-    """使用GitHub Copilot进行SQL分析的模型实现"""
+    """GitHub Copilot implementation for SQL analysis"""
     
     def __init__(self):
+        # Basic API configuration
         self.api_url = os.getenv('COPILOT_API_URL', 'http://localhost:8080')
+        self.auth_url = os.getenv('COPILOT_AUTH_URL', 'https://api.github.com/copilot_internal/v2/token')
         self.language = 'sql'
-    
-    def _query_copilot(self, prompt: str) -> str:
-        """向本地Copilot代理服务发送请求"""
+        
+        # Authentication configuration
+        self.github_token = os.getenv('GITHUB_TOKEN', '')
+        self.copilot_token = None
+        self.token_expiry = 0  # Unix timestamp for token expiration
+        
+    def _get_copilot_token(self) -> str:
+        """Get access token for GitHub Copilot API
+        
+        Returns the existing token if valid; otherwise requests a new one
+        """
+        current_time = time.time()
+        
+        # Check if we have a valid token
+        if self.copilot_token and self.token_expiry > current_time + 60:  # Refresh token 60 seconds before expiry
+            return self.copilot_token
+            
+        # Cannot get Copilot token without GitHub token
+        if not self.github_token:
+            raise Exception("GITHUB_TOKEN environment variable not set, cannot obtain Copilot access token")
+            
         try:
             headers = {
-                'Content-Type': 'application/json'
+                'Authorization': f'token {self.github_token}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
             }
+            
+            response = requests.get(self.auth_url, headers=headers)
+            response.raise_for_status()
+            
+            data = response.json()
+            self.copilot_token = data.get('token')
+            
+            # Set token expiration time, default is 10 minutes
+            expires_in = data.get('expires_in', 600)
+            self.token_expiry = current_time + expires_in
+            
+            return self.copilot_token
+        except Exception as e:
+            raise Exception(f"Failed to obtain Copilot access token: {str(e)}")
+    
+    def _query_copilot(self, prompt: str) -> str:
+        """Send request to Copilot API"""
+        try:
+            # Get access token
+            token = self._get_copilot_token()
+            
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            }
+            
             response = requests.post(
                 self.api_url,
                 headers=headers,
                 json={
                     'prompt': prompt,
-                    'language': self.language
-                }
+                    'language': self.language,
+                    'max_tokens': 1500,  # Increased max tokens to accommodate larger responses
+                    'temperature': 0.1,  # Use lower temperature for more deterministic results
+                    'top_p': 0.95        # Use higher top_p value to maintain some creativity
+                },
+                timeout=120  # Increased timeout for slow responses
             )
             response.raise_for_status()
             return response.text
         except Exception as e:
-            raise Exception(f"Copilot API调用失败: {str(e)}")
+            raise Exception(f"Copilot API call failed: {str(e)}")
     
     def analyze(self, sql_query: str) -> Dict[str, Any]:
-        """分析SQL查询并返回分析结果"""
-        safety_issues = self.get_safety_issues(sql_query)
-        performance_suggestions = self.get_performance_suggestions(sql_query)
-        risk_score = self.calculate_risk_score(sql_query)
+        """Analyze SQL query and return analysis results
         
-        return {
-            "safety_issues": safety_issues,
-            "performance_suggestions": performance_suggestions,
-            "risk_score": risk_score,
-            "risk_level": self.get_risk_level(risk_score),
-            "details": "由GitHub Copilot模型分析生成"
-        }
+        This method makes only one API call to Copilot to get all analysis results at once.
+        """
+        # Generate the combined prompt for all analyses
+        combined_prompt = self._get_combined_analysis_prompt(sql_query)
+        
+        try:
+            # Make a single API call to Copilot
+            response = self._query_copilot(combined_prompt)
+            
+            # Parse the JSON response
+            analysis_results = json.loads(response)
+            
+            # Extract analysis components
+            safety_issues = analysis_results.get('safety_issues', [])
+            performance_suggestions = analysis_results.get('performance_suggestions', [])
+            risk_score = analysis_results.get('risk_score', 50)
+            
+            # Ensure risk_score is an integer between 0 and 100
+            try:
+                risk_score = int(risk_score)
+                risk_score = max(0, min(100, risk_score))
+            except:
+                risk_score = 50  # Default medium risk
+            
+            # Return the complete analysis results
+            return {
+                "safety_issues": safety_issues,
+                "performance_suggestions": performance_suggestions,
+                "risk_score": risk_score,
+                "risk_level": self.get_risk_level(risk_score),
+                "details": "Generated by GitHub Copilot model analysis",
+                "api_calls": 1  # Indicate that only one API call was made
+            }
+        except Exception as e:
+            # If there's an error, return an error message instead of falling back to individual analyses
+            return {
+                "safety_issues": [{
+                    "issue": "Error in Copilot API analysis",
+                    "severity": "high",
+                    "recommendation": "Check Copilot API configuration and try again",
+                    "explanation": f"Error details: {str(e)}"
+                }],
+                "performance_suggestions": [],
+                "risk_score": 50,  # Default medium risk
+                "risk_level": self.get_risk_level(50),
+                "details": f"Error occurred during GitHub Copilot analysis: {str(e)}",
+                "api_calls": 1,  # Still only one API call was attempted
+                "error": True
+            }
+    
+    def _get_combined_analysis_prompt(self, sql_query: str) -> str:
+        """Generate a combined prompt for all analyses to reduce API calls"""
+        return f"""# SQL Analysis Task
+
+As an expert SQL analyzer, please analyze the following SQL query comprehensively for safety issues, performance optimization opportunities, and overall risk assessment.
+
+## SQL Query to Analyze:
+```sql
+{sql_query}
+```
+
+## Analysis Requirements:
+
+1. Identify safety issues including SQL injection risks, permission problems, data leakage risks, comment risks, and other security concerns.
+2. Provide performance optimization suggestions considering query structure, index usage, joins, data retrieval, filtering conditions, sorting/grouping, and data volume.
+3. Calculate an overall risk score (0-100) based on data modification risk, permission risk, injection risk, performance risk, data leakage risk, and transaction risk.
+
+## Response Format:
+Please provide your analysis in the following JSON format:
+
+```json
+{{
+  "safety_issues": [
+    {{
+      "issue": "Issue description",
+      "severity": "high/medium/low",
+      "recommendation": "Fix recommendation",
+      "explanation": "Detailed explanation of the problem and potential consequences"
+    }}
+  ],
+  "performance_suggestions": [
+    {{
+      "suggestion": "Optimization suggestion title",
+      "impact": "high/medium/low",
+      "recommendation": "Specific optimization method",
+      "explanation": "Detailed explanation of why this optimization is needed and expected performance improvement"
+    }}
+  ],
+  "risk_score": 50
+}}
+```
+
+If no issues are found in any category, return an empty array for that category. The risk score should be an integer between 0-100, where:
+- 0-29: Low risk (query is safe and efficient)
+- 30-69: Medium risk (query may have some safety or performance issues)
+- 70-100: High risk (query has serious safety or performance issues)
+
+Ensure your response is valid JSON format with no additional text or explanation outside the JSON structure.
+"""
     
     def get_safety_issues(self, sql_query: str) -> List[Dict[str, Any]]:
-        prompt = f"分析以下SQL查询的安全问题，返回JSON格式的问题列表，每个问题包含issue、severity和recommendation字段：\n{sql_query}"
-        response = self._query_copilot(prompt)
-        try:
-            import json
-            issues = json.loads(response)
-            return issues if isinstance(issues, list) else []
-        except:
-            return [{
-                "issue": "无法解析Copilot返回的安全问题分析结果",
-                "severity": "high",
-                "recommendation": "请检查Copilot API配置是否正确"
-            }]
+        """
+        This method is kept for compatibility with the SQLAnalyzerModel interface,
+        but it's not used in the main analyze flow to avoid multiple API calls.
+        """
+        # Return a message indicating this method shouldn't be used directly
+        return [{
+            "issue": "Direct method call not supported",
+            "severity": "medium",
+            "recommendation": "Use the analyze() method instead",
+            "explanation": "This method is maintained for compatibility but should not be called directly to avoid multiple API calls."
+        }]
     
     def get_performance_suggestions(self, sql_query: str) -> List[Dict[str, Any]]:
-        prompt = f"分析以下SQL查询的性能问题，返回JSON格式的优化建议列表，每个建议包含suggestion、impact和recommendation字段：\n{sql_query}"
-        response = self._query_copilot(prompt)
-        try:
-            import json
-            suggestions = json.loads(response)
-            return suggestions if isinstance(suggestions, list) else []
-        except:
-            return [{
-                "suggestion": "无法解析Copilot返回的性能建议",
-                "impact": "medium",
-                "recommendation": "请检查Copilot API配置是否正确"
-            }]
+        """
+        This method is kept for compatibility with the SQLAnalyzerModel interface,
+        but it's not used in the main analyze flow to avoid multiple API calls.
+        """
+        # Return a message indicating this method shouldn't be used directly
+        return [{
+            "suggestion": "Direct method call not supported",
+            "impact": "medium",
+            "recommendation": "Use the analyze() method instead",
+            "explanation": "This method is maintained for compatibility but should not be called directly to avoid multiple API calls."
+        }]
     
     def calculate_risk_score(self, sql_query: str) -> int:
-        prompt = f"评估以下SQL查询的风险等级，返回0-100之间的整数：\n{sql_query}"
-        response = self._query_copilot(prompt)
-        try:
-            score = int(response.strip())
-            return max(0, min(100, score))  # 确保分数在0-100之间
-        except:
-            return 50  # 默认中等风险
+        """
+        This method is kept for compatibility with the SQLAnalyzerModel interface,
+        but it's not used in the main analyze flow to avoid multiple API calls.
+        """
+        # Return a default risk score
+        return 50  # Default medium risk

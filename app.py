@@ -11,9 +11,9 @@ app = FastAPI(
 
 class SQLAnalysisRequest(BaseModel):
     sql: str
-    model: str = "simple"  # 默认使用simple模型
+    model: str = "simple"  # Default to simple model
 
-# 模型映射字典
+# Model mapping dictionary
 MODEL_MAP = {
     "simple": SimpleModel,
     "copilot": CopilotModel,
@@ -23,17 +23,17 @@ MODEL_MAP = {
 
 @app.post("/api/analyze")
 async def analyze_sql(request: SQLAnalysisRequest):
-    """分析SQL查询的安全性和性能"""
+    """Analyze SQL query for safety and performance"""
     try:
-        # 获取请求的模型类
+        # Get the requested model class
         model_class = MODEL_MAP.get(request.model.lower())
         if not model_class:
             raise HTTPException(
                 status_code=400,
-                detail=f"不支持的模型类型: {request.model}. 可用选项: simple, copilot, advanced"
+                detail=f"Unsupported model type: {request.model}. Available options: simple, copilot, advanced, ollama"
             )
         
-        # 实例化模型并分析SQL
+        # Instantiate model and analyze SQL
         model = model_class()
         result = model.analyze(request.sql)
         
@@ -44,7 +44,7 @@ async def analyze_sql(request: SQLAnalysisRequest):
 
 @app.get("/")
 async def root():
-    """API根路径，返回基本信息"""
+    """API root path, returns basic information"""
     return {
         "name": "SQL Safety Checker API",
         "version": "1.0.0",
